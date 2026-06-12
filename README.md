@@ -1,218 +1,481 @@
-# QDII 限购变化观察器｜项目代码结构与架构约束
+QDII 场外基金限额监控与定投偏差预警工具 PRD
+0. 产品定位
+0.1 一句话定位
 
-## 0. 项目性质
+面向场外 QDII 定投用户的限额变化监控与定投偏差预警工具。
 
-本项目不是普通 H5 页面。
+用户手动添加关注基金和每日定投计划金额。系统静默监控公开限额变化。当限额变化可能影响用户定投执行时，主动提醒用户去支付宝等代销平台核对并自行调整计划。
 
-本项目本质是：
+0.2 产品本质
 
-> QDII 限购当前状态表 + 定投偏差估算器 + 支付宝核对任务单 + 用户反馈校验闭环。
+不是基金推荐工具。
+不是交易工具。
+不是支付宝外挂。
+不是收益预测器。
 
-第一版目标不是做完整数据平台，而是在 48 小时内验证：
+本产品只做四件事：
 
-1. 用户是否愿意输入基金代码和定投金额；
-2. 用户是否会被“可能少投金额”刺激；
-3. 用户是否愿意跳转支付宝核对；
-4. 用户是否愿意回来点“一致 / 不一致 / 找不到入口”。
+用户观察清单
++ 公开限额监控
++ 定投金额偏差判断
++ 跨平台核对提醒
+0.3 核心判断
 
-## 1. 技术选型
+用户真正要的不是“知道基金限购了”。
+用户要的是：
 
-```txt
-前端框架：Next.js App Router
-语言：TypeScript
-样式：Tailwind CSS
-组件：shadcn/ui 可选，不强依赖
+我设置的每日定投金额，是否还会按原计划执行？
+如果限额变了，我是否需要去支付宝手动调整？
+1. MVP 功能范围
+1.1 MVP 必须做
+P0 用户添加 n 个 QDII 基金
+P0 用户为每只基金设置每日定投计划金额
+P0 系统维护每只基金的当前公开限额
+P0 系统记录限额变化事件
+P0 系统根据 planned_amount 与 new_limit 触发提醒
+P0 手机后台提醒用户去支付宝核对 / 修改定投计划
+P0 用户点击提醒进入核对页，反馈一致 / 不一致 / 找不到入口
+P0 数据可信状态：confirmed / probable / ambiguous / conflict / stale
+1.2 MVP 坚决不做
+不做支付宝登录
+不读取支付宝交易记录
+不读取用户真实持仓
+不做自动交易
+不做自动修改定投
+不做基金推荐
+不预测收益率
+不做重型 App
+不做复杂账户体系
+不做站内消息中心
+不做 OCR
+不做完整 B 端数据 API
+1.3 MVP 技术选型
+前端：Next.js App Router
 数据库：Supabase PostgreSQL
-鉴权：MVP 不做用户账户
-部署：Vercel + Supabase
-表单校验：Zod
-状态管理：不用 Zustand / Redux，MVP 不需要
-邮件订阅：MVP 0.2 再做
-爬虫 / OCR / API 数据源：MVP 不做
-```
+部署：Vercel
+后台轮询：Vercel Cron / Supabase Edge Function
+邮件：Resend
+身份：手机号 + manage_token
+登录：不做密码，不做复杂 Auth
+状态校验：Zod + TypeScript union + DB enum
+2. 核心用户流程
+2.1 首次使用
+进入首页
+→ 创建观察清单
+→ 输入基金代码
+→ 输入每日定投计划金额
+→ 系统读取当前公开限额
+→ 显示是否可能影响定投
+→ 加入观察清单
+2.2 日常监控
+后台轮询公开限额数据
+→ 发现 current_limit 发生变化
+→ 生成 limit_change_event
+→ 匹配所有关注该基金的 watchlist_items
+→ 执行 alert logic
+→ 只对真正影响用户计划的事件发邮件
+2.3 收到提醒后
+用户收到邮件
+→ 查看本次变化：old_limit → new_limit
+→ 看到对自己 planned_amount 的影响
+→ 点击“去支付宝核对”
+→ 打开支付宝自行核对 / 修改
+→ 回到工具反馈：一致 / 不一致 / 找不到入口
+3. 模块一：监控配置流 User Config
+3.1 设计原则
 
-## 2. 架构总原则
+用户配置成本必须低到 30 秒内完成。
 
-### 2.1 状态机单点定义
+用户只需要提供：
 
-所有可信状态只能在一个文件中定义：
+手机号
+基金代码
+每日定投计划金额
+提醒开关
 
-```txt
-src/lib/domain/confidence.ts
-```
+不要求：
 
-禁止在 React 组件里散落判断：
+真实姓名
+手机号
+支付宝账号
+持仓截图
+交易流水
+银行卡
+风险测评
+3.2 身份模型
 
-```tsx
-if (confidence_state === 'confirmed') {}
-if (confidence_state === 'probable') {}
-```
+MVP 不做账户密码。
 
-所有页面只能通过 `ConfidencePolicy` 读取策略。
+采用：
 
-### 2.2 金额计算单点定义
+email + manage_token
 
-所有金额计算只能在：
+系统生成一个不可猜测的管理链接：
 
-```txt
-src/lib/domain/calculate.ts
-```
+/watchlist/{manage_token}
 
-禁止在页面组件、API route、数据库查询函数里重复写：
+用户通过这个链接管理观察清单。
 
-```ts
-Math.min(plannedAmount, limitAmount)
-```
+3.3 添加基金流程
+输入项
+fund_code          基金代码
+planned_amount     每日计划定投金额
+frequency          默认 daily，MVP 可先固定 daily
+notify_enabled     默认 true
+添加后系统动作
+1. 查询 funds 是否存在
+2. 查询 current_limits 是否存在
+3. 如果存在当前限额，立即计算影响
+4. 写入 watchlist_items
+5. 保存 last_seen_limit_amount
+6. 保存 last_seen_confidence_state
+最小前端交互
+添加基金
+→ 输入基金代码或模糊搜索基金名称
+→ 自动带出基金名称
+→ 输入每日定投金额
+→ 展示当前公开限额
+→ 展示当前是否受影响
+→ 确认加入观察清单
+3.4 观察清单展示
 
-### 2.3 当前限额表优先
+每只基金卡片展示：
 
-MVP 不从历史事件表推导当前限额。
+基金名称
+基金代码
+用户计划：每日 X 元
+当前公开限额：Y 元
+可信状态
+影响判断：可能缩水 / 已恢复 / 暂未影响 / 需人工核对
+操作：重新检测 / 去支付宝核对 / 删除
+3.5 关键约束
 
-第一版只使用：
+页面文案只能叫：
 
-```txt
-current_limits
-```
+观察清单
+定投观察
+关注基金
 
-原因：48 小时版本里，不要让 AI 写“取最新 effective_date 的事件作为当前限额”这种危险逻辑。
+禁止叫：
 
-### 2.4 UI 不拥有业务规则
+我的持仓
+我的资产
+我的真实定投
 
-React 组件只负责展示。
+原因：系统不知道用户真实持仓，只知道用户手动配置的观察对象。
 
-组件不允许直接判断：
+4. 模块二：核心状态机与报警阈值 Alert Logic
+4.1 核心变量
+Planned_Amount       用户设置的每日计划定投金额
+Old_Limit            变化前公开限额
+New_Limit            变化后公开限额
+Old_State            变化前可信状态
+New_State            变化后可信状态
+Limit_Status         normal / limited / suspended / resumed / unknown
+Confidence_State     confirmed / probable / ambiguous / conflict / stale
+4.2 限额状态定义
+normal       未发现明确限购
+limited      存在明确限额
+suspended    暂停申购 / 暂停大额申购且限额可视为 0
+resumed      恢复申购 / 恢复大额申购
+unknown      无法判断
+4.3 可报警状态
 
-1. 哪些状态可计算；
-2. 哪些状态可提醒；
-3. 哪些状态展示金额；
-4. 金额怎么算；
-5. 偏差等级怎么算。
+只有以下状态允许进入金额型报警：
 
-组件只能消费后端或 domain 层返回的 `ResultViewModel`。
+confirmed
+probable
 
----
+以下状态默认不做金额型报警：
 
-# 3. 项目目录结构
+ambiguous
+conflict
+stale
+4.4 报警触发规则表
+规则编号	类型	条件	系统动作	用户价值
+T1	防守型缩水提醒	New_Limit < Planned_Amount 且 Old_Limit >= Planned_Amount	发送强提醒	用户原计划可能被动缩水
+T2	缩水加剧提醒	New_Limit < Old_Limit 且 New_Limit < Planned_Amount	发送提醒	用户少投金额扩大
+T3	开门迎客提醒	Old_Limit == 0 且 New_Limit > 0	发送提醒	基金从暂停 / 0 限额恢复
+T4	恢复计划提醒	Old_Limit < Planned_Amount 且 New_Limit >= Planned_Amount	发送强提醒	用户可检查是否恢复原定投金额
+T5	部分恢复提醒	New_Limit > Old_Limit 且 New_Limit < Planned_Amount	发送弱提醒	限额改善但仍低于计划
+T6	暂停申购提醒	New_Limit == 0 或 Limit_Status == suspended	发送强提醒	用户定投可能完全无法执行
+T7	静默屏蔽	New_Limit >= Planned_Amount 且不是从受限状态恢复	不提醒，只记录	变化不影响用户
+T8	大额无关变化屏蔽	Old_Limit = 50000 且 New_Limit = 10000 且 Planned_Amount = 100	不提醒，只记录	防止噪音
+T9	状态不可信	New_State in ambiguous/conflict/stale	不发金额提醒，可发低频核对提醒	避免误报
+T10	重复变化	dedupe_key 已存在	不提醒	防止重复骚扰
+4.5 影响等级
+critical:
+  New_Limit == 0
+  或 New_Limit <= Planned_Amount * 0.2
 
-```txt
-qdii-limit-watch/
-├── app/
-│   ├── layout.tsx                         # 全局布局
-│   ├── page.tsx                           # 首页：基金代码 + 定投金额输入
-│   ├── result/
-│   │   └── [checkId]/
-│   │       └── page.tsx                   # 结果页：展示估算结果 + 核对任务单 + 反馈入口
-│   ├── fund/
-│   │   └── [fundCode]/
-│   │       └── page.tsx                   # 基金详情页：当前限额、可信状态、来源
-│   ├── admin/
-│   │   └── page.tsx                       # 可选：人工维护 current_limits，MVP 可暂不做
-│   └── api/
-│       ├── check/
-│       │   └── route.ts                   # 创建体检记录，返回 checkId
-│       ├── feedback/
-│       │   └── route.ts                   # 提交用户反馈
-│       └── funds/
-│           └── route.ts                   # 搜索基金 / 获取热门基金列表
-│
-├── src/
-│   ├── components/
-│   │   ├── home/
-│   │   │   ├── FundSearchBox.tsx          # 基金代码搜索框
-│   │   │   ├── AmountInput.tsx            # 定投金额输入
-│   │   │   └── HotFundList.tsx            # 热门限购基金
-│   │   │
-│   │   ├── result/
-│   │   │   ├── ResultSummaryCard.tsx      # 结果摘要卡片
-│   │   │   ├── ShortfallCard.tsx          # 可能少投金额展示
-│   │   │   ├── ConfidenceBadge.tsx        # 可信状态标签
-│   │   │   ├── VerifyTaskCard.tsx         # 支付宝核对任务单
-│   │   │   ├── FeedbackSheet.tsx          # 一致 / 不一致 / 找不到入口
-│   │   │   └── DataDegradedCard.tsx       # ambiguous / conflict / stale 降级展示
-│   │   │
-│   │   ├── fund/
-│   │   │   ├── CurrentLimitCard.tsx       # 当前限额卡片
-│   │   │   └── SourceInfoCard.tsx         # 来源信息卡片
-│   │   │
-│   │   └── common/
-│   │       ├── Disclaimer.tsx             # 全站免责声明
-│   │       ├── PageShell.tsx              # 页面外壳
-│   │       └── EmptyState.tsx             # 空状态
-│   │
-│   ├── lib/
-│   │   ├── domain/
-│   │   │   ├── confidence.ts              # 可信状态枚举与策略表
-│   │   │   ├── calculate.ts               # 定投偏差计算
-│   │   │   ├── deviation.ts               # 偏差等级判断
-│   │   │   ├── result-state.ts            # 页面结果状态组装
-│   │   │   └── copywriting.ts             # 不同状态下的文案模板
-│   │   │
-│   │   ├── db/
-│   │   │   ├── supabase-server.ts         # 服务端 Supabase client
-│   │   │   ├── supabase-browser.ts        # 浏览器 Supabase client，尽量少用
-│   │   │   ├── fund.queries.ts            # funds 查询
-│   │   │   ├── current-limit.queries.ts   # current_limits 查询
-│   │   │   ├── check.queries.ts           # check_sessions 写入/读取
-│   │   │   └── feedback.queries.ts        # feedback_logs 写入
-│   │   │
-│   │   ├── schemas/
-│   │   │   ├── check.schema.ts            # 创建体检记录的 Zod schema
-│   │   │   ├── feedback.schema.ts         # 用户反馈 Zod schema
-│   │   │   └── fund.schema.ts             # 基金搜索 Zod schema
-│   │   │
-│   │   ├── tracking/
-│   │   │   └── local-check-session.ts     # localStorage 记录 checkId 与回流状态
-│   │   │
-│   │   └── utils/
-│   │       ├── money.ts                   # 金额格式化
-│   │       ├── date.ts                    # 日期格式化
-│   │       └── url.ts                     # URL 参数处理
-│   │
-│   ├── types/
-│   │   ├── database.ts                    # Supabase 自动生成或手写 DB 类型
-│   │   ├── domain.ts                      # 业务类型
-│   │   └── view-model.ts                  # 前端展示模型类型
-│   │
-│   └── data/
-│       └── seed-funds.ts                  # MVP 种子基金数据，可选
-│
-├── supabase/
-│   ├── migrations/
-│   │   └── 001_init.sql                   # 初始化数据库表
-│   └── seed.sql                           # 8 只种子基金 + 当前限额
-│
-├── docs/
-│   ├── 项目代码结构.md                    # 当前文件
-│   ├── 状态机规则.md                      # confirmed/probable/... 的唯一解释
-│   ├── 数据库设计.md                      # 表结构与字段解释
-│   ├── Cursor开发规则.md                  # 给 AI 的代码生成边界
-│   └── MVP开发顺序.md                     # 48 小时开发路线
-│
-├── .env.local
-├── package.json
-├── tailwind.config.ts
-├── next.config.ts
-└── README.md
-```
+high:
+  New_Limit < Planned_Amount
+  且 New_Limit > Planned_Amount * 0.2
 
----
+medium:
+  New_Limit < Planned_Amount
+  但 Old_Limit 也已低于 Planned_Amount，仅属于缩水加剧
 
-# 4. 数据库架构
+low:
+  New_Limit >= Planned_Amount
+  或限额变化不影响用户计划
+4.6 少投金额计算
+Estimated_Executable = min(Planned_Amount, New_Limit)
+Estimated_Shortfall = Planned_Amount - Estimated_Executable
+Execution_Ratio = Estimated_Executable / Planned_Amount
 
-## 4.1 第一版只建 4 张核心表
+仅在 confirmed / probable 状态下输出具体金额。
 
-MVP 0.1 不做完整历史事件流。
+4.7 静默屏蔽原则
 
-```txt
-funds
-current_limits
-check_sessions
-feedback_logs
-```
+系统不是限额变化广播器。
+系统是用户计划影响判断器。
 
-## 4.2 枚举类型
+所以：
 
-```sql
+限额变化 ≠ 一定提醒
+限额变化影响用户计划 = 才提醒
+
+示例：
+
+用户每日计划 100 元
+限额 50000 → 10000
+不提醒
+
+用户每日计划 100 元
+限额 100 → 10
+提醒
+
+用户每日计划 100 元
+限额 10 → 100
+提醒
+
+用户每日计划 100 元
+限额 10 → 50
+弱提醒
+
+用户每日计划 100 元
+限额 0 → 10
+提醒，但标注仍低于计划
+5. 模块三：数据轮询与降级策略 Data Engine
+5.1 数据生产原则
+
+MVP 不追求全自动。
+先采用：
+
+人工维护 current_limits
++ 半自动抓取公告
++ 人工确认可信状态
++ 后台定时比对变化
+
+原因：基金公告脏、渠道表述混乱、业务范围不稳定。全自动解析会制造误报。
+
+5.2 数据层级
+raw_sources
+→ parsed_candidates
+→ current_limits
+→ limit_change_events
+→ alert_events
+→ notification_logs
+5.3 可信状态定义
+状态	定义	是否计算金额	是否触发提醒
+confirmed	公告明确限额、业务范围明确、人工校验通过	是	是
+probable	第三方或公告语义较明确，但渠道未完全确认	是，但必须标注估算	是，弱提醒
+ambiguous	语义不清，无法确认是否影响定投	否	默认不提醒
+conflict	公告、第三方、用户反馈冲突	否	不发金额提醒
+stale	数据过期或抓取失败多次	否	不提醒
+5.4 ambiguous 降级策略
+
+当系统抓到无法解析的公告：
+
+不输出具体少投金额
+不发强提醒
+不生成“限额变化已确认”文案
+只进入“需核对”状态
+
+可选低频提醒：
+
+你关注的【基金名称】出现疑似限购变化，但公开资料未明确是否影响支付宝定投。请进入支付宝核对定投计划和实际确认金额。
+
+触发限制：
+
+同一基金 7 天内最多 1 次 ambiguous 提醒
+5.5 conflict 降级策略
+
+当来源冲突：
+
+不计算
+不提醒金额
+不写“限额已变为 X”
+展示冲突来源
+进入人工复核队列
+
+用户侧文案：
+
+你关注的【基金名称】限购信息出现来源冲突。系统暂不输出金额判断，避免误导。请以支付宝页面和基金公告为准。
+5.6 stale 降级策略
+
+当数据超过有效期：
+
+保留上次记录
+不触发提醒
+页面标注：数据可能过期
+后台进入重新抓取队列
+
+有效期建议：
+
+confirmed: 7 天
+probable: 3 天
+ambiguous: 1 天
+conflict: 1 天
+stale: 不可提醒
+5.7 数据变化检测逻辑
+
+后台每次更新 current_limits 时：
+
+1. 读取旧 current_limit
+2. 写入新 current_limit
+3. 比较关键字段：
+   - limit_amount
+   - limit_status
+   - confidence_state
+   - effective_date
+4. 若发生有效变化，写入 limit_change_events
+5. 扫描 watchlist_items
+6. 执行 alert logic
+7. 写入 alert_events
+8. 去重后写 notification_logs
+9. 发送邮件
+6. 模块四：闭环引导与防流失 The Action Loop
+6.1 核心问题
+
+提醒不是终点。
+真正的闭环是：
+
+收到提醒
+→ 理解影响
+→ 打开支付宝
+→ 核对定投计划
+→ 修改或不修改
+→ 回到工具反馈
+
+最大断点是跨 App。
+
+所以提醒必须做到：
+
+让用户立刻知道自己可能损失的是“计划执行权”，不是收益机会
+6.2 文案设计原则
+
+禁止写：
+
+建议买入
+建议加仓
+建议卖出
+收益机会
+低位布局
+
+必须写：
+
+你的原定投计划可能没有按金额执行
+请去支付宝核对定投金额、实际扣款和确认金额
+是否修改由你自行决定
+6.3 防守型缩水提醒模板
+
+标题：
+
+【需核对】你关注的 QDII 限额已下调，可能影响每日定投
+
+正文：
+
+你观察的【{fund_name}】公开限额已由 {old_limit} 元调整为 {new_limit} 元。
+
+你设置的观察计划是：每日 {planned_amount} 元。
+
+按当前公开限额估算，后续每次定投可能只有 {executable_amount} 元进入申购，约 {shortfall_amount} 元可能无法按原计划执行。
+
+请进入支付宝核对：
+1. 当前定投计划金额
+2. 最近一次实际扣款金额
+3. 基金确认金额
+4. 是否存在退款或部分失败
+5. 是否需要手动调整定投金额
+
+本提醒仅用于定投执行检查，不构成投资建议。
+
+按钮：
+
+去支付宝核对
+我已核对，反馈结果
+6.4 进攻型恢复提醒模板
+
+标题：
+
+【限额恢复】你关注的 QDII 限额已上调，请检查定投计划
+
+正文：
+
+你观察的【{fund_name}】公开限额已由 {old_limit} 元上调至 {new_limit} 元。
+
+你设置的观察计划是：每日 {planned_amount} 元。
+
+如果你此前曾因限额下调手动降低定投金额，现在可能需要进入支付宝核对当前定投设置，确认是否仍符合你的资金计划。
+
+本提醒不构成买入建议，只提醒你检查定投执行设置。
+
+按钮：
+
+去支付宝核对定投设置
+6.5 暂停申购提醒模板
+
+标题：
+
+【高优先级】你关注的 QDII 可能暂停申购
+
+正文：
+
+你观察的【{fund_name}】公开信息显示当前可能暂停申购或限额为 0。
+
+你设置的观察计划是：每日 {planned_amount} 元。
+
+这意味着后续定投可能无法按原计划进入申购。请进入支付宝核对实际扣款、确认金额和定投状态。
+6.6 不确定性提醒模板
+
+标题：
+
+【需人工核对】你关注的 QDII 限购信息不明确
+
+正文：
+
+你观察的【{fund_name}】出现疑似限购变化，但公开资料未明确是否影响支付宝定投。
+
+系统暂不输出少投金额，避免误报。
+
+请进入支付宝核对实际页面，并反馈是否一致。
+6.7 回流机制
+
+每封邮件都必须带：
+
+check_url = /check/{alert_event_id}?token={manage_token}
+
+用户点击后进入核对页。
+
+核对页只问三个按钮：
+
+一致
+不一致
+找不到入口
+
+如果不一致，允许补充：
+
+支付宝实际显示限额
+支付宝实际扣款金额
+备注
+
+不要问长表单。
+长表单会杀死反馈率。
+
+7. 核心实体数据结构 DDL 友好
+7.1 Enum
 create type confidence_state as enum (
   'confirmed',
   'probable',
@@ -227,33 +490,31 @@ create type feedback_type as enum (
   'entry_not_found'
 );
 
-create type business_type as enum (
-  'subscription',
-  'recurring_investment',
-  'conversion_in',
-  'all',
-  'unknown'
+create type alert_type as enum (
+  'defensive_shortfall',
+  'shortfall_worsened',
+  'reopened',
+  'plan_recovery',
+  'partial_recovery',
+  'suspended',
+  'uncertain_check_required'
 );
 
-create type limit_type as enum (
-  'single_order',
-  'daily_total',
-  'single_account',
-  'single_channel',
-  'unknown'
+create type alert_severity as enum (
+  'critical',
+  'high',
+  'medium',
+  'low'
 );
 
-create type channel_scope as enum (
-  'all_channels',
-  'agency_channels',
-  'alipay_unconfirmed',
+create type limit_status as enum (
+  'normal',
+  'limited',
+  'suspended',
+  'resumed',
   'unknown'
 );
-```
-
-## 4.3 funds：基金基础表
-
-```sql
+7.2 funds
 create table funds (
   id uuid primary key default gen_random_uuid(),
   fund_code text unique not null,
@@ -268,518 +529,368 @@ create table funds (
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
-```
+7.3 watchlists
+create table watchlists (
+  id uuid primary key default gen_random_uuid(),
+  email text not null,
+  manage_token text unique not null,
+  email_verified boolean default false,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+7.4 watchlist_items
+create table watchlist_items (
+  id uuid primary key default gen_random_uuid(),
+  watchlist_id uuid references watchlists(id) on delete cascade,
+  fund_id uuid references funds(id) on delete cascade,
 
-## 4.4 current_limits：当前限额表
+  fund_code text not null,
+  planned_amount numeric(12, 2) not null,
+  frequency text not null default 'daily',
 
-```sql
+  notify_enabled boolean default true,
+
+  last_seen_limit_amount numeric(12, 2),
+  last_seen_limit_status limit_status,
+  last_seen_confidence_state confidence_state,
+
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+
+  unique(watchlist_id, fund_code)
+);
+7.5 current_limits
 create table current_limits (
   id uuid primary key default gen_random_uuid(),
   fund_id uuid references funds(id) on delete cascade,
   fund_code text not null,
+
   limit_amount numeric(12, 2),
   old_limit_amount numeric(12, 2),
-  business_type business_type default 'unknown',
-  limit_type limit_type default 'unknown',
+  limit_status limit_status default 'unknown',
+
+  business_type text default 'unknown',
+  limit_type text default 'unknown',
   currency text default 'CNY',
-  channel_scope channel_scope default 'unknown',
+  channel_scope text default 'unknown',
+
   confidence_state confidence_state not null,
+
   effective_date date,
   source_url text,
   raw_excerpt text,
   manual_verified_at timestamptz,
-  updated_at timestamptz default now()
+
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+
+  unique(fund_code)
 );
-```
-
-## 4.5 check_sessions：体检记录表
-
-```sql
-create table check_sessions (
+7.6 limit_change_events
+create table limit_change_events (
   id uuid primary key default gen_random_uuid(),
-  fund_id uuid references funds(id),
-  current_limit_id uuid references current_limits(id),
+
+  fund_id uuid references funds(id) on delete cascade,
+  fund_code text not null,
+
+  old_limit_amount numeric(12, 2),
+  new_limit_amount numeric(12, 2),
+
+  old_limit_status limit_status,
+  new_limit_status limit_status,
+
+  old_confidence_state confidence_state,
+  new_confidence_state confidence_state,
+
+  effective_date date,
+  source_url text,
+  raw_excerpt text,
+
+  change_hash text unique not null,
+
+  created_at timestamptz default now()
+);
+7.7 alert_events
+create table alert_events (
+  id uuid primary key default gen_random_uuid(),
+
+  watchlist_id uuid references watchlists(id) on delete cascade,
+  watchlist_item_id uuid references watchlist_items(id) on delete cascade,
+  limit_change_event_id uuid references limit_change_events(id) on delete cascade,
 
   fund_code text not null,
-  planned_amount numeric(12, 2) not null,
-  frequency text default 'unknown',
 
-  current_limit_amount numeric(12, 2),
+  alert_type alert_type not null,
+  severity alert_severity not null,
+
+  planned_amount numeric(12, 2) not null,
+  old_limit_amount numeric(12, 2),
+  new_limit_amount numeric(12, 2),
+
   estimated_executable_amount numeric(12, 2),
   estimated_shortfall_amount numeric(12, 2),
   estimated_execution_ratio numeric(8, 4),
 
   confidence_state confidence_state not null,
-  result_mode text not null,
-  calculation_version text not null default 'v0.1',
 
-  source_channel text default 'h5',
+  dedupe_key text unique not null,
   created_at timestamptz default now()
 );
-```
+7.8 notification_logs
+create table notification_logs (
+  id uuid primary key default gen_random_uuid(),
 
-## 4.6 feedback_logs：用户反馈表
+  alert_event_id uuid references alert_events(id) on delete cascade,
+  watchlist_id uuid references watchlists(id) on delete cascade,
+  watchlist_item_id uuid references watchlist_items(id) on delete cascade,
 
-```sql
+  email text not null,
+  channel text default 'email',
+
+  status text not null default 'pending',
+  sent_at timestamptz,
+  error_message text,
+
+  dedupe_key text unique not null,
+  created_at timestamptz default now()
+);
+7.9 feedback_logs
 create table feedback_logs (
   id uuid primary key default gen_random_uuid(),
-  check_session_id uuid references check_sessions(id) on delete set null,
-  fund_id uuid references funds(id),
-  current_limit_id uuid references current_limits(id),
+
+  alert_event_id uuid references alert_events(id) on delete set null,
+  watchlist_id uuid references watchlists(id) on delete set null,
+  watchlist_item_id uuid references watchlist_items(id) on delete set null,
 
   fund_code text not null,
-  planned_amount numeric(12, 2),
   feedback_type feedback_type not null,
+
+  actual_limit_amount numeric(12, 2),
   actual_payment_amount numeric(12, 2),
   comment text,
-  source_page text default 'result',
 
+  source_page text default 'alert_check_page',
   created_at timestamptz default now()
 );
-```
-
----
-
-# 5. 状态机规则
-
-## 5.1 可信状态定义
-
-```ts
-export const ConfidenceStates = [
-  'confirmed',
-  'probable',
-  'ambiguous',
-  'conflict',
-  'stale',
-] as const;
-
-export type ConfidenceState = typeof ConfidenceStates[number];
-```
-
-## 5.2 状态策略表
-
-```ts
-export const ConfidencePolicy: Record<ConfidenceState, {
-  calculable: boolean;
-  showAmount: boolean;
-  allowReminder: boolean;
-  resultMode: 'exact_estimate' | 'weak_estimate' | 'verify_only' | 'conflict' | 'expired';
-  primaryCTA: 'verify' | 'show_sources' | 'refresh_or_verify';
-}> = {
-  confirmed: {
-    calculable: true,
-    showAmount: true,
-    allowReminder: true,
-    resultMode: 'exact_estimate',
-    primaryCTA: 'verify',
-  },
-  probable: {
-    calculable: true,
-    showAmount: true,
-    allowReminder: true,
-    resultMode: 'weak_estimate',
-    primaryCTA: 'verify',
-  },
-  ambiguous: {
-    calculable: false,
-    showAmount: false,
-    allowReminder: false,
-    resultMode: 'verify_only',
-    primaryCTA: 'verify',
-  },
-  conflict: {
-    calculable: false,
-    showAmount: false,
-    allowReminder: false,
-    resultMode: 'conflict',
-    primaryCTA: 'show_sources',
-  },
-  stale: {
-    calculable: false,
-    showAmount: false,
-    allowReminder: false,
-    resultMode: 'expired',
-    primaryCTA: 'refresh_or_verify',
-  },
-};
-```
-
-## 5.3 扩展页面状态
-
-数据库可信状态只描述“已有数据的可信度”。
-
-页面还需要两个状态：
-
-```ts
-export type ResultState =
-  | ConfidenceState
-  | 'untracked'
-  | 'input_error';
-```
-
-规则：
-
-```ts
-if (!fund) return 'input_error';
-if (!currentLimit) return 'untracked';
-return currentLimit.confidence_state;
-```
-
----
-
-# 6. 金额计算规则
-
-## 6.1 计算函数
-
-```ts
-export function calculateShortfall(params: {
+8. 核心报警判断伪代码
+function evaluateAlert(params: {
   plannedAmount: number;
-  limitAmount: number | null;
+  oldLimit: number | null;
+  newLimit: number | null;
+  oldStatus: LimitStatus;
+  newStatus: LimitStatus;
   confidenceState: ConfidenceState;
 }) {
-  const policy = ConfidencePolicy[params.confidenceState];
+  const {
+    plannedAmount,
+    oldLimit,
+    newLimit,
+    oldStatus,
+    newStatus,
+    confidenceState,
+  } = params;
 
-  if (!policy.calculable || params.limitAmount === null) {
+  if (confidenceState === 'conflict') {
     return {
-      estimatedExecutableAmount: null,
-      estimatedShortfallAmount: null,
-      estimatedExecutionRatio: null,
+      shouldAlert: false,
+      reason: 'conflict_no_amount_alert',
+    };
+  }
+
+  if (confidenceState === 'stale') {
+    return {
+      shouldAlert: false,
+      reason: 'stale_no_alert',
+    };
+  }
+
+  if (confidenceState === 'ambiguous') {
+    return {
+      shouldAlert: true,
+      alertType: 'uncertain_check_required',
+      severity: 'low',
       calculable: false,
     };
   }
 
-  const estimatedExecutableAmount = Math.min(
-    params.plannedAmount,
-    params.limitAmount
-  );
+  if (newStatus === 'suspended' || newLimit === 0) {
+    return {
+      shouldAlert: true,
+      alertType: 'suspended',
+      severity: 'critical',
+      calculable: true,
+    };
+  }
 
-  const estimatedShortfallAmount =
-    params.plannedAmount - estimatedExecutableAmount;
+  if (oldLimit === 0 && newLimit !== null && newLimit > 0) {
+    return {
+      shouldAlert: true,
+      alertType: 'reopened',
+      severity: 'high',
+      calculable: true,
+    };
+  }
 
-  const estimatedExecutionRatio =
-    params.plannedAmount === 0
-      ? null
-      : estimatedExecutableAmount / params.plannedAmount;
+  if (
+    oldLimit !== null &&
+    newLimit !== null &&
+    oldLimit < plannedAmount &&
+    newLimit >= plannedAmount
+  ) {
+    return {
+      shouldAlert: true,
+      alertType: 'plan_recovery',
+      severity: 'high',
+      calculable: true,
+    };
+  }
+
+  if (
+    oldLimit !== null &&
+    newLimit !== null &&
+    oldLimit >= plannedAmount &&
+    newLimit < plannedAmount
+  ) {
+    return {
+      shouldAlert: true,
+      alertType: 'defensive_shortfall',
+      severity: newLimit <= plannedAmount * 0.2 ? 'critical' : 'high',
+      calculable: true,
+    };
+  }
+
+  if (
+    oldLimit !== null &&
+    newLimit !== null &&
+    newLimit < oldLimit &&
+    newLimit < plannedAmount
+  ) {
+    return {
+      shouldAlert: true,
+      alertType: 'shortfall_worsened',
+      severity: 'medium',
+      calculable: true,
+    };
+  }
+
+  if (
+    oldLimit !== null &&
+    newLimit !== null &&
+    newLimit > oldLimit &&
+    newLimit < plannedAmount
+  ) {
+    return {
+      shouldAlert: true,
+      alertType: 'partial_recovery',
+      severity: 'low',
+      calculable: true,
+    };
+  }
 
   return {
-    estimatedExecutableAmount,
-    estimatedShortfallAmount,
-    estimatedExecutionRatio,
-    calculable: true,
+    shouldAlert: false,
+    reason: 'limit_change_not_relevant_to_user_plan',
   };
 }
-```
-
-## 6.2 MVP 0.1 只输出单次估算
-
-不要做复杂 7 天 / 30 天日历推算。
-
-第一版文案只允许写：
-
-```txt
-按当前公开限额估算，你的单次定投可能少投约 X 元。
-如果该限额持续，后续每次定投都可能出现类似偏差。
-```
-
-禁止写：
-
-```txt
-未来 30 天一定少投 X 元。
-```
-
----
-
-# 7. 页面路由设计
-
-## 7.1 首页 `/`
-
-功能：
-
-1. 展示一句核心判断；
-2. 输入基金代码；
-3. 输入定投金额；
-4. 展示热门限购基金；
-5. 点击“检查我的定投”。
-
-提交后调用：
-
-```txt
-POST /api/check
-```
-
-返回：
-
-```json
-{
-  "checkId": "uuid"
-}
-```
-
-然后跳转：
-
-```txt
-/result/{checkId}
-```
-
-## 7.2 结果页 `/result/[checkId]`
-
-展示：
-
-1. 基金名称；
-2. 用户输入金额；
-3. 当前公开限额；
-4. 可信状态；
-5. 可计算时展示可能少投金额；
-6. 不可计算时展示降级原因；
-7. 支付宝核对任务单；
-8. 反馈入口。
-
-## 7.3 基金详情页 `/fund/[fundCode]`
-
-展示：
-
-1. 当前限额；
-2. 生效日期；
-3. 可信状态；
-4. 来源链接；
-5. 原文摘录；
-6. 最近反馈概况，MVP 可不做。
-
----
-
-# 8. 支付宝核对任务单链路
-
-## 8.1 点击核对前
-
-用户点击“去支付宝核对”时：
-
-1. localStorage 写入当前 `checkId`；
-2. 记录 `verify_started_at`；
-3. 复制任务单；
-4. 可尝试打开支付宝搜索页，打不开也不影响。
-
-```ts
-localStorage.setItem('active_check_id', checkId);
-localStorage.setItem('verify_started_at', Date.now().toString());
-```
-
-## 8.2 用户切回 H5
-
-监听页面可见性：
-
-```ts
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') {
-    const checkId = localStorage.getItem('active_check_id');
-    if (checkId) {
-      openFeedbackSheet(checkId);
-    }
-  }
-});
-```
-
-## 8.3 反馈按钮
-
-只保留三按钮：
-
-```txt
-一致
-不一致
-找不到入口
-```
-
-可选填写：
-
-```txt
-支付宝实际确认金额
-```
-
----
-
-# 9. API 设计
-
-## 9.1 创建体检记录
-
-```txt
-POST /api/check
-```
-
-入参：
-
-```json
-{
-  "fundCode": "160213",
-  "plannedAmount": 100,
-  "frequency": "daily"
-}
-```
-
-服务端动作：
-
-1. Zod 校验；
-2. 查询 `funds`；
-3. 查询 `current_limits`；
-4. 根据 `ConfidencePolicy` 判断是否可计算；
-5. 调用 `calculateShortfall`；
-6. 写入 `check_sessions`；
-7. 返回 `checkId`。
-
-## 9.2 提交反馈
-
-```txt
-POST /api/feedback
-```
-
-入参：
-
-```json
-{
-  "checkId": "uuid",
-  "feedbackType": "matched",
-  "actualPaymentAmount": 10,
-  "comment": ""
-}
-```
-
-服务端动作：
-
-1. Zod 校验；
-2. 查询 `check_sessions`；
-3. 写入 `feedback_logs`；
-4. 清理前端 localStorage 由客户端完成。
-
----
-
-# 10. Cursor 开发规则
-
-## 10.1 禁止事项
-
-Cursor 不允许：
-
-1. 在组件中写金额计算；
-2. 在组件中直接解释可信状态；
-3. 新增状态枚举但不更新 `ConfidencePolicy`；
-4. 从 `limit_events` 推导当前限额；
-5. 默认把查不到数据当成 `stale`；
-6. 在前端信任用户传来的 `current_limit_amount`；
-7. 做登录系统；
-8. 做邮箱订阅；
-9. 做历史事件库；
-10. 做 OCR；
-11. 做基金推荐；
-12. 做支付宝数据读取。
-
-## 10.2 必须事项
-
-Cursor 每次新增代码必须满足：
-
-1. TypeScript 类型通过；
-2. 所有用户输入经过 Zod；
-3. 所有金额计算走 `calculateShortfall`；
-4. 所有可信状态走 `ConfidencePolicy`；
-5. 所有数据库写入在 API route 内完成；
-6. 结果页必须支持 `confirmed / probable / ambiguous / conflict / stale / untracked / input_error`；
-7. 反馈链路必须支持 localStorage 回流弹窗。
-
----
-
-# 11. 48 小时开发顺序
-
-## Day 1 上午：项目骨架
-
-1. 初始化 Next.js；
-2. 接 Tailwind；
-3. 建 Supabase；
-4. 写 migration；
-5. seed 8 只基金；
-6. 写 Supabase server client。
-
-## Day 1 下午：核心 domain
-
-1. `confidence.ts`；
-2. `calculate.ts`；
-3. `result-state.ts`；
-4. Zod schemas；
-5. `/api/check`。
-
-## Day 1 晚上：首页 + 结果页
-
-1. 首页输入；
-2. 热门基金列表；
-3. 创建 check session；
-4. 跳转结果页；
-5. 结果页读取 check session；
-6. 展示金额估算或降级卡片。
-
-## Day 2 上午：核对任务单 + 反馈
-
-1. 任务单组件；
-2. 复制任务单；
-3. localStorage 写入 checkId；
-4. visibilitychange 回流弹窗；
-5. `/api/feedback`；
-6. 三按钮反馈。
-
-## Day 2 下午：兜底与上线
-
-1. 空状态；
-2. 错误状态；
-3. 免责声明；
-4. 移动端检查；
-5. Vercel 部署；
-6. Supabase RLS 简化配置；
-7. 埋点或简单日志。
-
----
-
-# 12. 架构验收清单
-
-每次 Cursor 或程序员改代码，都问这 10 个问题：
-
-1. 是否出现了第二套可信状态定义？
-2. 是否有组件直接判断 `confirmed / probable`？
-3. 是否有组件直接计算少投金额？
-4. 是否有接口相信前端传来的限额金额？
-5. 是否有 SQL 用 `order by effective_date desc limit 1` 直接取当前限额？
-6. 是否保留了 `current_limit_id`，保证历史体检可追溯？
-7. 是否支持 `ambiguous / conflict / stale` 的降级页？
-8. 查不到基金时是否使用 `untracked`，而不是污染成 `stale`？
-9. 点击支付宝核对后，是否写入 localStorage？
-10. 用户切回页面时，是否自动弹出反馈卡？
-
-只要有一个答案是否定的，就说明代码已经偏离架构。
-
----
-
-# 13. MVP 暂不做清单
-
-以下内容不允许进入 48 小时版本：
-
-```txt
-App
-账户体系
-我的定投列表
-站内提醒中心
-邮箱订阅
-限额变化邮件
-历史事件库
-完整 limit_events
-OCR
-爬虫
-支付宝登录
-自动读取交易记录
-自动修改定投
-基金推荐
-B 端 API
-复杂后台管理
-```
-
-第一版只做一个锋利闭环：
-
-```txt
-输入基金代码和金额
-→ 读取当前限额
-→ 输出单次可能少投
-→ 生成支付宝核对任务
-→ 用户反馈一致 / 不一致 / 找不到入口
-```
+9. 极简交互流程
+9.1 首页
+标题：
+QDII 限购观察清单
+
+副标题：
+添加你正在场外定投的 QDII 基金。公开限额变化时，提醒你去支付宝核对定投计划。
+
+主按钮：
+添加第一只基金
+9.2 添加基金页
+基金代码 / 名称
+每日计划定投金额
+开启限额变化提醒
+邮箱
+提交
+
+提交后：
+
+已加入观察清单
+当前公开限额：X 元
+你的计划：每日 Y 元
+当前判断：暂未影响 / 可能受影响 / 数据需核对
+9.3 观察清单页
+基金 A
+每日计划：100 元
+当前限额：10 元
+状态：可能缩水
+按钮：去支付宝核对 / 修改观察金额 / 删除
+
+基金 B
+每日计划：100 元
+当前限额：10000 元
+状态：暂未影响
+按钮：重新检测 / 删除
+9.4 邮件提醒落地页
+本次限额变化
+基金名称
+old_limit → new_limit
+你的计划金额
+预计可执行金额
+预计少投金额
+可信状态
+去支付宝核对
+反馈一致 / 不一致 / 找不到入口
+10. Vibe Coding 开发顺序
+Day 1
+1. 初始化 Next.js + Supabase
+2. 建表：funds / watchlists / watchlist_items / current_limits
+3. 做首页 + 添加基金流程
+4. 做观察清单页
+5. seed 8 只热门 QDII 基金
+Day 2
+1. 建 limit_change_events / alert_events / notification_logs
+2. 写 evaluateAlert()
+3. 写模拟后台任务：手动触发限额变化
+4. 写邮件模板
+5. 接 Resend
+6. 写提醒落地页 + 反馈按钮
+Day 3 可选
+1. 增加 ambiguous / conflict / stale 降级页
+2. 增加去重逻辑
+3. 增加反馈日志
+4. 增加管理链接 token
+5. 增加简单后台 current_limits 编辑页
+11. 成功指标
+11.1 行为指标
+访问后创建观察清单比例 ≥ 8%
+创建观察清单后添加基金比例 ≥ 60%
+单用户平均添加基金数 ≥ 2
+添加基金后填写定投金额比例 ≥ 80%
+收到提醒后点击落地页比例 ≥ 20%
+点击后反馈比例 ≥ 5%
+11.2 数据指标
+热门基金 current_limits 覆盖率 ≥ 80%
+confirmed / probable 数据占比 ≥ 70%
+误报反馈率 ≤ 10%
+重复提醒率 ≤ 1%
+conflict 平均处理时长 ≤ 24 小时
+12. 最终边界
+
+系统只提醒：
+
+公开限额变化可能影响你的定投计划执行
+
+系统不告诉用户：
+
+该不该买
+买多少
+什么时候买
+未来收益如何
+是否应该加仓
+
+最终闭环：
+
+用户添加 n 个基金
+→ 系统监控公开限额
+→ 限额变化影响用户计划
+→ 系统提醒
+→ 用户去支付宝核对 / 修改
+→ 用户反馈
+→ 数据可信度提升
