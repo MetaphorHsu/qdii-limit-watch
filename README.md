@@ -1,275 +1,405 @@
-# QDII 场外基金限额监控与定投偏差预警工具 PRD
+# QDII 场外基金限额监控与定投偏差短信预警工具 PRD
 
 ## 0. 产品定位
 
 ### 0.1 一句话定位
 
-面向场外 QDII 定投用户的**限额变化监控与定投偏差预警工具**。
+面向场外 QDII 定投用户的**限额变化短信预警工具**。
 
-用户手动添加关注基金和每日定投计划金额。系统静默监控公开限额变化。当限额变化可能影响用户定投执行时，主动提醒用户去支付宝等代销平台核对并自行调整计划。
+用户手动添加关注基金、定投周期和单次定投计划金额。系统后台监控公开限额变化。当限额变化影响用户配置的定投计划时，通过短信提醒用户去支付宝等代销平台核对并自行调整定投计划。
 
 ### 0.2 产品本质
 
-不是基金推荐工具。
+本产品不是基金推荐工具。
 不是交易工具。
 不是支付宝外挂。
-不是收益预测器。
+不是收益预测工具。
+不是自动定投修改工具。
 
-本产品只做四件事：
+本产品只做：
 
 ```txt
-用户观察清单
+观察清单
++ 手机号验证
 + 公开限额监控
-+ 定投金额偏差判断
-+ 跨平台核对提醒
++ 定投执行偏差判断
++ 短信提醒
++ 核对反馈
 ```
 
-### 0.3 核心判断
-
-用户真正要的不是“知道基金限购了”。
-用户要的是：
+### 0.3 最小闭环
 
 ```txt
-我设置的每日定投金额，是否还会按原计划执行？
-如果限额变了，我是否需要去支付宝手动调整？
+用户验证手机号
+→ 添加观察基金
+→ 系统监控限额变化
+→ 只在影响计划时发短信
+→ 用户点击短信链接
+→ 去支付宝核对
+→ 回来反馈
+```
+
+### 0.4 核心边界
+
+系统只提醒：
+
+```txt
+公开限额变化可能影响你手动配置的定投观察计划。
+```
+
+系统不判断：
+
+```txt
+该不该买
+该买多少
+是否加仓
+是否卖出
+收益是否更高
+未来走势如何
 ```
 
 ---
 
 # 1. MVP 功能范围
 
-## 1.1 MVP 必须做
+## 1.1 P0 必须完成
 
 ```txt
+P0 用户输入手机号
+P0 用户获取并验证短信验证码
+P0 验证成功后创建观察清单
 P0 用户添加 n 个 QDII 基金
-P0 用户为每只基金设置每日定投计划金额
-P0 系统维护每只基金的当前公开限额
-P0 系统记录限额变化事件
-P0 系统根据 planned_amount 与 new_limit 触发提醒
-P0 手机后台提醒用户去支付宝核对 / 修改定投计划
-P0 用户点击提醒进入核对页，反馈一致 / 不一致 / 找不到入口
+P0 用户为每只基金设置定投周期和单次计划金额
+P0 系统维护每只基金的当前公开限额 current_limits
+P0 系统记录限额变化事件 limit_change_events
+P0 系统根据 planned_amount 与 new_limit 判断是否影响计划
+P0 只在影响计划时发送短信
+P0 短信带提醒详情链接
+P0 用户点击短信链接进入提醒详情页
+P0 用户去支付宝核对
+P0 用户回来反馈：一致 / 不一致 / 找不到入口
+P0 用户可关闭单只基金提醒
+P0 用户可退订全部短信提醒
+P0 系统防重复发送
 P0 数据可信状态：confirmed / probable / ambiguous / conflict / stale
 ```
 
-## 1.2 MVP 坚决不做
+## 1.2 P0 禁止做
 
 ```txt
-不做支付宝登录
-不读取支付宝交易记录
-不读取用户真实持仓
-不做自动交易
-不做自动修改定投
+不接支付宝登录
+不读取支付宝交易流水
+不读取真实持仓
+不自动修改定投
+不自动交易
 不做基金推荐
-不预测收益率
+不预测收益
 不做重型 App
 不做复杂账户体系
-不做站内消息中心
 不做 OCR
-不做完整 B 端数据 API
+不做完整公告爬虫
+不做微信通知
+不做 Web Push
+不做邮件提醒
+不做 B 端 API
 ```
 
 ## 1.3 MVP 技术选型
 
 ```txt
 前端：Next.js App Router
+语言：TypeScript
+样式：Tailwind CSS
 数据库：Supabase PostgreSQL
-部署：Vercel
-后台轮询：Vercel Cron / Supabase Edge Function
-邮件：Resend
-身份：手机号 + manage_token
-登录：不做密码，不做复杂 Auth
-状态校验：Zod + TypeScript union + DB enum
+后台任务：Vercel Cron / Supabase Edge Function
+短信：短信服务商抽象层，供应商可后选
+身份：手机号 + 短信验证码 OTP + manage_token
+状态校验：Zod + TypeScript union + PostgreSQL enum
+部署：Vercel + Supabase
+```
+
+### 1.4 关键工程原则
+
+```txt
+短信发送必须走后端。
+短信服务商 SDK 不允许散落在业务代码中。
+是否发短信必须由 alert policy 决定。
+React 组件不允许直接判断是否发短信。
+金额计算不允许写在组件中。
+状态机不允许散落在页面中。
 ```
 
 ---
 
 # 2. 核心用户流程
 
-## 2.1 首次使用
+## 2.1 首次创建观察清单
 
 ```txt
 进入首页
+→ 输入手机号
+→ 获取短信验证码
+→ 输入验证码
+→ 验证成功
 → 创建观察清单
-→ 输入基金代码
-→ 输入每日定投计划金额
-→ 系统读取当前公开限额
-→ 显示是否可能影响定投
-→ 加入观察清单
+→ 生成 manage_token
+→ 进入观察清单页
 ```
 
-## 2.2 日常监控
+### 页面文案
 
 ```txt
-后台轮询公开限额数据
-→ 发现 current_limit 发生变化
-→ 生成 limit_change_event
-→ 匹配所有关注该基金的 watchlist_items
-→ 执行 alert logic
-→ 只对真正影响用户计划的事件发邮件
+创建 QDII 限购观察清单
+输入手机号，限额变化影响你的配置计划时，我们用短信提醒你去支付宝核对。
 ```
 
-## 2.3 收到提醒后
+底部说明：
 
 ```txt
-用户收到邮件
-→ 查看本次变化：old_limit → new_limit
-→ 看到对自己 planned_amount 的影响
-→ 点击“去支付宝核对”
-→ 打开支付宝自行核对 / 修改
-→ 回到工具反馈：一致 / 不一致 / 找不到入口
+系统不会读取你的支付宝账号、真实持仓或交易流水，只记录你手动配置的观察对象。
 ```
 
 ---
 
-# 3. 模块一：监控配置流 User Config
-
-## 3.1 设计原则
-
-用户配置成本必须低到 30 秒内完成。
-
-用户只需要提供：
+## 2.2 添加观察基金
 
 ```txt
-手机号
-基金代码
-每日定投计划金额
-提醒开关
+点击添加基金
+→ 输入基金代码 / 模糊搜索基金名称
+→ 选择定投周期
+→ 输入单次定投计划金额
+→ 开启限额变化短信提醒
+→ 系统读取当前公开限额
+→ 展示当前是否可能受影响
+→ 加入观察清单
 ```
 
-不要求：
+### 字段
 
 ```txt
-真实姓名
-手机号
-支付宝账号
-持仓截图
-交易流水
-银行卡
-风险测评
+fund_code
+fund_name
+frequency
+planned_amount
+notify_enabled
 ```
 
-## 3.2 身份模型
+### 关键定义
 
-MVP 不做账户密码。
+`planned_amount` 指用户配置的**单次定投计划金额**，不是系统读取的真实扣款金额。
+
+例如：
+
+```txt
+每周周五定投 100 元
+planned_amount = 100
+frequency = weekly_friday
+```
+
+系统只知道用户配置的观察计划，不知道真实定投是否存在。
+
+---
+
+## 2.3 日常监控
+
+```txt
+后台轮询或人工更新 current_limits
+→ 发现限额有效变化
+→ 生成 limit_change_events
+→ 扫描关注该基金的 watchlist_items
+→ 对每个用户配置执行 evaluateAlert()
+→ 命中短信触发规则
+→ 生成 alert_events
+→ 生成 notification_logs
+→ 去重
+→ 发送短信
+```
+
+---
+
+## 2.4 用户收到短信后
+
+```txt
+用户收到短信
+→ 点击短信链接
+→ 进入提醒详情页
+→ 查看 old_limit → new_limit
+→ 查看对自己 planned_amount 的影响
+→ 点击“去支付宝核对”
+→ 用户自行打开支付宝核对 / 修改
+→ 回到提醒详情页
+→ 反馈：一致 / 不一致 / 找不到入口
+```
+
+---
+
+# 3. 模块一：观察清单与手机号验证
+
+## 3.1 身份模型
+
+MVP 不做账号密码。
 
 采用：
 
 ```txt
-email + manage_token
+phone + OTP + manage_token
 ```
 
-系统生成一个不可猜测的管理链接：
+解释：
 
 ```txt
-/watchlist/{manage_token}
+phone：接收短信提醒
+OTP：一次性验证码，用于证明手机号归属
+manage_token：管理观察清单的长 token
 ```
 
-用户通过这个链接管理观察清单。
-
-## 3.3 添加基金流程
-
-### 输入项
+### 禁止
 
 ```txt
-fund_code          基金代码
-planned_amount     每日计划定投金额
-frequency          默认 daily，MVP 可先固定 daily
-notify_enabled     默认 true
+不允许未验证手机号创建观察清单
+不允许未验证手机号接收提醒
+不允许前端直接调用短信发送接口
+不允许把完整手机号暴露给前端页面
 ```
 
-### 添加后系统动作
+---
+
+## 3.2 手机号验证流程
 
 ```txt
-1. 查询 funds 是否存在
-2. 查询 current_limits 是否存在
-3. 如果存在当前限额，立即计算影响
-4. 写入 watchlist_items
-5. 保存 last_seen_limit_amount
-6. 保存 last_seen_confidence_state
+用户输入手机号
+→ POST /api/sms/send-code
+→ 系统校验频率限制
+→ 生成 6 位验证码
+→ 存储 code_hash
+→ 发送短信验证码
+→ 用户输入验证码
+→ POST /api/sms/verify-code
+→ 校验成功
+→ 创建或读取 watchlist
+→ 返回 manage_token
 ```
 
-### 最小前端交互
+### 验证码规则
 
 ```txt
-添加基金
-→ 输入基金代码或模糊搜索基金名称
-→ 自动带出基金名称
-→ 输入每日定投金额
-→ 展示当前公开限额
-→ 展示当前是否受影响
-→ 确认加入观察清单
+验证码有效期：5 分钟
+同一手机号 60 秒内只能发送 1 次
+同一手机号 1 小时最多发送 5 次
+同一 IP 1 小时最多请求 20 次
+验证码最多错误 5 次
+验证码不明文入库，只保存 code_hash
+验证成功后 consumed_at 写入时间
 ```
 
-## 3.4 观察清单展示
+---
 
-每只基金卡片展示：
+## 3.3 观察清单规则
+
+一个手机号对应一个观察清单。
+
+```txt
+phone_hash unique
+watchlist_id unique
+manage_token_hash unique
+```
+
+前端 URL：
+
+```txt
+/watchlist?token={manage_token}
+```
+
+页面只展示脱敏手机号：
+
+```txt
+188****4310
+```
+
+---
+
+## 3.4 观察基金卡片
+
+每张卡片展示：
 
 ```txt
 基金名称
 基金代码
-用户计划：每日 X 元
-当前公开限额：Y 元
+定投周期
+单次计划金额
+当前公开限额
 可信状态
-影响判断：可能缩水 / 已恢复 / 暂未影响 / 需人工核对
-操作：重新检测 / 去支付宝核对 / 删除
+影响判断
+最近提醒时间
+操作按钮
 ```
 
-## 3.5 关键约束
-
-页面文案只能叫：
+按钮：
 
 ```txt
-观察清单
-定投观察
-关注基金
+去支付宝核对
+修改计划
+关闭提醒
+删除
 ```
 
-禁止叫：
+状态：
 
 ```txt
-我的持仓
-我的资产
-我的真实定投
+可能缩水
+限额恢复
+暂未影响
+需核对
+数据冲突
+数据过期
 ```
-
-原因：系统不知道用户真实持仓，只知道用户手动配置的观察对象。
 
 ---
 
-# 4. 模块二：核心状态机与报警阈值 Alert Logic
+# 4. 模块二：限额状态机与报警逻辑
 
 ## 4.1 核心变量
 
 ```txt
-Planned_Amount       用户设置的每日计划定投金额
-Old_Limit            变化前公开限额
-New_Limit            变化后公开限额
-Old_State            变化前可信状态
-New_State            变化后可信状态
-Limit_Status         normal / limited / suspended / resumed / unknown
-Confidence_State     confirmed / probable / ambiguous / conflict / stale
+Planned_Amount        用户设置的单次定投计划金额
+Old_Limit             变化前公开限额
+New_Limit             变化后公开限额
+Old_Limit_Status      变化前限额状态
+New_Limit_Status      变化后限额状态
+Old_Confidence_State  变化前可信状态
+New_Confidence_State  变化后可信状态
 ```
 
-## 4.2 限额状态定义
+## 4.2 限额状态 limit_status
 
 ```txt
 normal       未发现明确限购
 limited      存在明确限额
-suspended    暂停申购 / 暂停大额申购且限额可视为 0
+suspended    暂停申购 / 限额为 0
 resumed      恢复申购 / 恢复大额申购
 unknown      无法判断
 ```
 
-## 4.3 可报警状态
+## 4.3 可信状态 confidence_state
 
-只有以下状态允许进入金额型报警：
+```txt
+confirmed    公告明确，业务范围明确，人工校验通过
+probable     公开资料较清楚，但渠道或业务范围未完全确认
+ambiguous    语义不清，无法确认是否影响定投
+conflict     公告、第三方、用户反馈冲突
+stale        数据过期或抓取失败多次
+```
+
+## 4.4 金额型计算准入
+
+只有以下状态允许输出具体金额：
 
 ```txt
 confirmed
 probable
 ```
 
-以下状态默认不做金额型报警：
+以下状态禁止输出具体少投金额：
 
 ```txt
 ambiguous
@@ -277,22 +407,65 @@ conflict
 stale
 ```
 
-## 4.4 报警触发规则表
+---
 
-| 规则编号 | 类型       | 条件                                                                 | 系统动作            | 用户价值           |
-| ---- | -------- | ------------------------------------------------------------------ | --------------- | -------------- |
-| T1   | 防守型缩水提醒  | `New_Limit < Planned_Amount` 且 `Old_Limit >= Planned_Amount`       | 发送强提醒           | 用户原计划可能被动缩水    |
-| T2   | 缩水加剧提醒   | `New_Limit < Old_Limit` 且 `New_Limit < Planned_Amount`             | 发送提醒            | 用户少投金额扩大       |
-| T3   | 开门迎客提醒   | `Old_Limit == 0` 且 `New_Limit > 0`                                 | 发送提醒            | 基金从暂停 / 0 限额恢复 |
-| T4   | 恢复计划提醒   | `Old_Limit < Planned_Amount` 且 `New_Limit >= Planned_Amount`       | 发送强提醒           | 用户可检查是否恢复原定投金额 |
-| T5   | 部分恢复提醒   | `New_Limit > Old_Limit` 且 `New_Limit < Planned_Amount`             | 发送弱提醒           | 限额改善但仍低于计划     |
-| T6   | 暂停申购提醒   | `New_Limit == 0` 或 `Limit_Status == suspended`                     | 发送强提醒           | 用户定投可能完全无法执行   |
-| T7   | 静默屏蔽     | `New_Limit >= Planned_Amount` 且不是从受限状态恢复                           | 不提醒，只记录         | 变化不影响用户        |
-| T8   | 大额无关变化屏蔽 | `Old_Limit = 50000` 且 `New_Limit = 10000` 且 `Planned_Amount = 100` | 不提醒，只记录         | 防止噪音           |
-| T9   | 状态不可信    | `New_State in ambiguous/conflict/stale`                            | 不发金额提醒，可发低频核对提醒 | 避免误报           |
-| T10  | 重复变化     | `dedupe_key` 已存在                                                   | 不提醒             | 防止重复骚扰         |
+# 5. 短信触发规则
 
-## 4.5 影响等级
+## 5.1 核心原则
+
+系统不是限额变化广播器。
+系统只在“限额变化影响用户配置计划”时打扰用户。
+
+```txt
+限额变化 ≠ 发短信
+限额变化影响 planned_amount = 才考虑发短信
+```
+
+---
+
+## 5.2 可短信提醒 alert_type
+
+P0 只允许 4 类短信：
+
+```txt
+defensive_shortfall   防守型缩水
+suspended             暂停 / 限额为 0
+plan_recovery         恢复到覆盖用户计划
+reopened              从 0 恢复可申购
+```
+
+P0 默认不发短信：
+
+```txt
+partial_recovery
+shortfall_worsened 的低优先级重复变化
+ambiguous
+conflict
+stale
+limit_change_not_relevant_to_user_plan
+```
+
+---
+
+## 5.3 报警触发规则表
+
+| 编号  | 类型     | 条件                                                                 | 是否短信 | 原因                     |
+| --- | ------ | ------------------------------------------------------------------ | ---: | ---------------------- |
+| T1  | 防守型缩水  | `Old_Limit >= Planned_Amount` 且 `New_Limit < Planned_Amount`       |    是 | 原本可能完整执行，现在可能缩水        |
+| T2  | 暂停申购   | `New_Limit == 0` 或 `New_Limit_Status == suspended`                 |    是 | 定投可能完全无法执行             |
+| T3  | 恢复计划   | `Old_Limit < Planned_Amount` 且 `New_Limit >= Planned_Amount`       |    是 | 用户可能需要检查是否恢复原计划        |
+| T4  | 开门迎客   | `Old_Limit == 0` 且 `New_Limit > 0`                                 |    是 | 从不可申购恢复为可申购            |
+| T5  | 部分恢复   | `New_Limit > Old_Limit` 且 `New_Limit < Planned_Amount`             |  默认否 | 改善但仍无法覆盖计划，短信价值弱       |
+| T6  | 缩水加剧   | `New_Limit < Old_Limit` 且 `New_Limit < Planned_Amount`             |  条件发 | 仅当距上次提醒超过 7 天或缩水比例显著扩大 |
+| T7  | 大额无关变化 | `Old_Limit = 50000` 且 `New_Limit = 10000` 且 `Planned_Amount = 100` |    否 | 不影响用户计划                |
+| T8  | 数据不确定  | `confidence_state = ambiguous`                                     |    否 | 避免制造误报                 |
+| T9  | 来源冲突   | `confidence_state = conflict`                                      |    否 | 禁止金额提醒                 |
+| T10 | 数据过期   | `confidence_state = stale`                                         |    否 | 没资格打扰用户                |
+| T11 | 重复提醒   | `dedupe_key` 已存在                                                   |    否 | 防重复骚扰                  |
+
+---
+
+## 5.4 影响等级
 
 ```txt
 critical:
@@ -305,14 +478,16 @@ high:
 
 medium:
   New_Limit < Planned_Amount
-  但 Old_Limit 也已低于 Planned_Amount，仅属于缩水加剧
+  但该用户之前已处于受限状态
 
 low:
   New_Limit >= Planned_Amount
-  或限额变化不影响用户计划
+  或变化不影响用户计划
 ```
 
-## 4.6 少投金额计算
+---
+
+## 5.5 少投金额计算
 
 ```txt
 Estimated_Executable = min(Planned_Amount, New_Limit)
@@ -320,63 +495,107 @@ Estimated_Shortfall = Planned_Amount - Estimated_Executable
 Execution_Ratio = Estimated_Executable / Planned_Amount
 ```
 
-仅在 `confirmed / probable` 状态下输出具体金额。
-
-## 4.7 静默屏蔽原则
-
-系统不是限额变化广播器。
-系统是用户计划影响判断器。
-
-所以：
+限制：
 
 ```txt
-限额变化 ≠ 一定提醒
-限额变化影响用户计划 = 才提醒
-```
-
-示例：
-
-```txt
-用户每日计划 100 元
-限额 50000 → 10000
-不提醒
-
-用户每日计划 100 元
-限额 100 → 10
-提醒
-
-用户每日计划 100 元
-限额 10 → 100
-提醒
-
-用户每日计划 100 元
-限额 10 → 50
-弱提醒
-
-用户每日计划 100 元
-限额 0 → 10
-提醒，但标注仍低于计划
+仅 confirmed / probable 可计算
+probable 必须标注“公开限额估算”
+ambiguous / conflict / stale 不输出金额
 ```
 
 ---
 
-# 5. 模块三：数据轮询与降级策略 Data Engine
+# 6. 防重复发送与防打扰规则
 
-## 5.1 数据生产原则
+## 6.1 去重规则
 
-MVP 不追求全自动。
-先采用：
+每个提醒事件生成 dedupe_key：
+
+```txt
+watchlist_item_id + limit_change_event_id + alert_type
+```
+
+如果 `notification_logs.dedupe_key` 已存在：
+
+```txt
+不再发送短信
+```
+
+---
+
+## 6.2 频率限制
+
+```txt
+同一 watchlist_item 同一 limit_change_event 只发 1 次
+同一手机号每天最多 3 条短信
+同一基金同一手机号 24 小时内最多 1 条短信
+同一手机号 7 天内 ambiguous 不发短信
+用户关闭 notify_enabled 后不发
+用户退订后不发
+confidence_state = conflict 不发
+confidence_state = stale 不发
+```
+
+---
+
+## 6.3 退订机制
+
+用户必须可以退订。
+
+退订入口：
+
+```txt
+短信链接中的退订入口
+提醒详情页底部退订按钮
+观察清单页关闭全部短信提醒
+```
+
+退订后：
+
+```txt
+watchlists.sms_unsubscribed_at 写入时间
+watchlist_items.notify_enabled 全部置 false
+后续不再发送短信
+```
+
+退订页文案：
+
+```txt
+你已关闭 QDII 限额变化短信提醒。
+系统不会再向该手机号发送观察基金提醒。
+你仍可通过管理链接查看或删除观察清单。
+```
+
+---
+
+# 7. 数据轮询与降级策略
+
+## 7.1 数据生产策略
+
+MVP 不追求全自动公告解析。
+
+采用：
 
 ```txt
 人工维护 current_limits
 + 半自动抓取公告
 + 人工确认可信状态
-+ 后台定时比对变化
++ 后台比对变化
 ```
 
-原因：基金公告脏、渠道表述混乱、业务范围不稳定。全自动解析会制造误报。
+原因：
 
-## 5.2 数据层级
+```txt
+基金公告语义脏
+渠道范围不清
+定投是否覆盖经常不明
+全自动解析容易误报
+短信误报成本高
+```
+
+---
+
+## 7.2 数据流
 
 ```txt
 raw_sources
@@ -385,253 +604,183 @@ raw_sources
 → limit_change_events
 → alert_events
 → notification_logs
-```
-
-## 5.3 可信状态定义
-
-| 状态        | 定义                   | 是否计算金额    | 是否触发提醒 |
-| --------- | -------------------- | --------- | ------ |
-| confirmed | 公告明确限额、业务范围明确、人工校验通过 | 是         | 是      |
-| probable  | 第三方或公告语义较明确，但渠道未完全确认 | 是，但必须标注估算 | 是，弱提醒  |
-| ambiguous | 语义不清，无法确认是否影响定投      | 否         | 默认不提醒  |
-| conflict  | 公告、第三方、用户反馈冲突        | 否         | 不发金额提醒 |
-| stale     | 数据过期或抓取失败多次          | 否         | 不提醒    |
-
-## 5.4 ambiguous 降级策略
-
-当系统抓到无法解析的公告：
-
-```txt
-不输出具体少投金额
-不发强提醒
-不生成“限额变化已确认”文案
-只进入“需核对”状态
-```
-
-可选低频提醒：
-
-```txt
-你关注的【基金名称】出现疑似限购变化，但公开资料未明确是否影响支付宝定投。请进入支付宝核对定投计划和实际确认金额。
-```
-
-触发限制：
-
-```txt
-同一基金 7 天内最多 1 次 ambiguous 提醒
-```
-
-## 5.5 conflict 降级策略
-
-当来源冲突：
-
-```txt
-不计算
-不提醒金额
-不写“限额已变为 X”
-展示冲突来源
-进入人工复核队列
-```
-
-用户侧文案：
-
-```txt
-你关注的【基金名称】限购信息出现来源冲突。系统暂不输出金额判断，避免误导。请以支付宝页面和基金公告为准。
-```
-
-## 5.6 stale 降级策略
-
-当数据超过有效期：
-
-```txt
-保留上次记录
-不触发提醒
-页面标注：数据可能过期
-后台进入重新抓取队列
-```
-
-有效期建议：
-
-```txt
-confirmed: 7 天
-probable: 3 天
-ambiguous: 1 天
-conflict: 1 天
-stale: 不可提醒
-```
-
-## 5.7 数据变化检测逻辑
-
-后台每次更新 `current_limits` 时：
-
-```txt
-1. 读取旧 current_limit
-2. 写入新 current_limit
-3. 比较关键字段：
-   - limit_amount
-   - limit_status
-   - confidence_state
-   - effective_date
-4. 若发生有效变化，写入 limit_change_events
-5. 扫描 watchlist_items
-6. 执行 alert logic
-7. 写入 alert_events
-8. 去重后写 notification_logs
-9. 发送邮件
+→ feedback_logs
 ```
 
 ---
 
-# 6. 模块四：闭环引导与防流失 The Action Loop
+## 7.3 current_limits
 
-## 6.1 核心问题
+`current_limits` 是当前公开限额的唯一来源。
 
-提醒不是终点。
-真正的闭环是：
-
-```txt
-收到提醒
-→ 理解影响
-→ 打开支付宝
-→ 核对定投计划
-→ 修改或不修改
-→ 回到工具反馈
-```
-
-最大断点是跨 App。
-
-所以提醒必须做到：
+禁止：
 
 ```txt
-让用户立刻知道自己可能损失的是“计划执行权”，不是收益机会
+从 limit_change_events 反推当前限额
+从最近一条公告直接推当前限额
+在前端计算当前限额
 ```
 
-## 6.2 文案设计原则
+---
 
-禁止写：
+## 7.4 limit_change_events
+
+`limit_change_events` 只记录变化历史。
+
+当以下字段变化时，生成事件：
+
+```txt
+limit_amount
+limit_status
+confidence_state
+effective_date
+source_url
+```
+
+但并非所有变化都会触发短信。
+
+---
+
+## 7.5 降级策略
+
+### ambiguous
+
+```txt
+不输出少投金额
+不发短信
+页面提示：公开信息存在疑似变化，但无法确认是否影响定投
+进入人工复核队列
+```
+
+### conflict
+
+```txt
+不输出少投金额
+不发短信
+展示冲突来源
+进入人工复核队列
+```
+
+### stale
+
+```txt
+不输出少投金额
+不发短信
+保留上次记录
+页面标注：数据可能过期
+```
+
+---
+
+# 8. 短信文案
+
+## 8.1 文案原则
+
+禁止出现：
 
 ```txt
 建议买入
 建议加仓
 建议卖出
 收益机会
-低位布局
+抄底
+推荐
+配置建议
 ```
 
-必须写：
+允许出现：
 
 ```txt
-你的原定投计划可能没有按金额执行
-请去支付宝核对定投金额、实际扣款和确认金额
+公开限额变化
+你配置的观察计划
+可能影响定投执行
+请去支付宝核对
 是否修改由你自行决定
 ```
 
-## 6.3 防守型缩水提醒模板
+---
 
-标题：
+## 8.2 防守型缩水短信
 
 ```txt
-【需核对】你关注的 QDII 限额已下调，可能影响每日定投
+【QDII限额提醒】你观察的{基金简称}公开限额由{old_limit}元降至{new_limit}元，你配置的定投为{planned_amount}元，后续可能每次少投约{shortfall_amount}元。请去支付宝核对：{link}
 ```
 
-正文：
+---
+
+## 8.3 暂停申购短信
 
 ```txt
-你观察的【{fund_name}】公开限额已由 {old_limit} 元调整为 {new_limit} 元。
+【QDII限额提醒】你观察的{基金简称}公开信息显示可能暂停申购或限额为0，你配置的定投计划可能无法执行。请去支付宝核对：{link}
+```
 
-你设置的观察计划是：每日 {planned_amount} 元。
+---
 
-按当前公开限额估算，后续每次定投可能只有 {executable_amount} 元进入申购，约 {shortfall_amount} 元可能无法按原计划执行。
+## 8.4 限额恢复短信
 
-请进入支付宝核对：
+```txt
+【QDII限额提醒】你观察的{基金简称}公开限额由{old_limit}元恢复至{new_limit}元。如你此前降低过定投金额，请核对是否需要调回原计划：{link}
+```
+
+---
+
+## 8.5 从 0 恢复短信
+
+```txt
+【QDII限额提醒】你观察的{基金简称}公开限额已由0元恢复至{new_limit}元。请进入支付宝核对定投设置是否仍符合你的计划：{link}
+```
+
+---
+
+# 9. 提醒详情页 Action Loop
+
+## 9.1 页面目标
+
+短信只能提供入口。
+完整解释必须放在提醒详情页。
+
+提醒详情页必须回答：
+
+```txt
+发生了什么
+对我的计划有什么影响
+我现在该去哪里核对
+我核对后怎么反馈
+```
+
+---
+
+## 9.2 页面结构
+
+```txt
+顶部：限额变化提醒
+卡片 1：基金信息
+卡片 2：old_limit → new_limit
+卡片 3：对观察计划的影响
+卡片 4：支付宝核对清单
+按钮：去支付宝核对
+按钮：复制核对清单
+反馈区：一致 / 不一致 / 找不到入口
+底部：免责声明 + 关闭提醒 / 退订入口
+```
+
+---
+
+## 9.3 支付宝核对清单
+
+```txt
 1. 当前定投计划金额
 2. 最近一次实际扣款金额
 3. 基金确认金额
 4. 是否存在退款或部分失败
 5. 是否需要手动调整定投金额
-
-本提醒仅用于定投执行检查，不构成投资建议。
 ```
 
-按钮：
+---
 
-```txt
-去支付宝核对
-我已核对，反馈结果
-```
+## 9.4 反馈选项
 
-## 6.4 进攻型恢复提醒模板
-
-标题：
-
-```txt
-【限额恢复】你关注的 QDII 限额已上调，请检查定投计划
-```
-
-正文：
-
-```txt
-你观察的【{fund_name}】公开限额已由 {old_limit} 元上调至 {new_limit} 元。
-
-你设置的观察计划是：每日 {planned_amount} 元。
-
-如果你此前曾因限额下调手动降低定投金额，现在可能需要进入支付宝核对当前定投设置，确认是否仍符合你的资金计划。
-
-本提醒不构成买入建议，只提醒你检查定投执行设置。
-```
-
-按钮：
-
-```txt
-去支付宝核对定投设置
-```
-
-## 6.5 暂停申购提醒模板
-
-标题：
-
-```txt
-【高优先级】你关注的 QDII 可能暂停申购
-```
-
-正文：
-
-```txt
-你观察的【{fund_name}】公开信息显示当前可能暂停申购或限额为 0。
-
-你设置的观察计划是：每日 {planned_amount} 元。
-
-这意味着后续定投可能无法按原计划进入申购。请进入支付宝核对实际扣款、确认金额和定投状态。
-```
-
-## 6.6 不确定性提醒模板
-
-标题：
-
-```txt
-【需人工核对】你关注的 QDII 限购信息不明确
-```
-
-正文：
-
-```txt
-你观察的【{fund_name}】出现疑似限购变化，但公开资料未明确是否影响支付宝定投。
-
-系统暂不输出少投金额，避免误报。
-
-请进入支付宝核对实际页面，并反馈是否一致。
-```
-
-## 6.7 回流机制
-
-每封邮件都必须带：
-
-```txt
-check_url = /check/{alert_event_id}?token={manage_token}
-```
-
-用户点击后进入核对页。
-
-核对页只问三个按钮：
+默认只展示三个按钮：
 
 ```txt
 一致
@@ -639,7 +788,7 @@ check_url = /check/{alert_event_id}?token={manage_token}
 找不到入口
 ```
 
-如果不一致，允许补充：
+点击“不一致”后可选填写：
 
 ```txt
 支付宝实际显示限额
@@ -647,14 +796,13 @@ check_url = /check/{alert_event_id}?token={manage_token}
 备注
 ```
 
-不要问长表单。
-长表单会杀死反馈率。
+禁止强制长表单。
 
 ---
 
-# 7. 核心实体数据结构 DDL 友好
+# 10. 核心数据结构 DDL
 
-## 7.1 Enum
+## 10.1 Enum
 
 ```sql
 create type confidence_state as enum (
@@ -665,10 +813,12 @@ create type confidence_state as enum (
   'stale'
 );
 
-create type feedback_type as enum (
-  'matched',
-  'mismatched',
-  'entry_not_found'
+create type limit_status as enum (
+  'normal',
+  'limited',
+  'suspended',
+  'resumed',
+  'unknown'
 );
 
 create type alert_type as enum (
@@ -688,16 +838,24 @@ create type alert_severity as enum (
   'low'
 );
 
-create type limit_status as enum (
-  'normal',
-  'limited',
-  'suspended',
-  'resumed',
-  'unknown'
+create type feedback_type as enum (
+  'matched',
+  'mismatched',
+  'entry_not_found'
+);
+
+create type notification_status as enum (
+  'pending',
+  'sent',
+  'failed',
+  'skipped',
+  'deduped'
 );
 ```
 
-## 7.2 funds
+---
+
+## 10.2 funds
 
 ```sql
 create table funds (
@@ -716,24 +874,70 @@ create table funds (
 );
 ```
 
-## 7.3 watchlists
+---
+
+## 10.3 watchlists
 
 ```sql
 create table watchlists (
   id uuid primary key default gen_random_uuid(),
-  email text not null,
-  manage_token text unique not null,
-  email_verified boolean default false,
+
+  phone_hash text unique not null,
+  phone_e164 text not null,
+  phone_masked text not null,
+
+  phone_verified_at timestamptz,
+  manage_token_hash text unique not null,
+
+  sms_opt_in_at timestamptz,
+  sms_unsubscribed_at timestamptz,
+
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
 ```
 
-## 7.4 watchlist_items
+说明：
+
+```txt
+phone_e164 仅服务端使用
+phone_hash 用于唯一性判断
+phone_masked 用于前端展示
+manage_token_hash 不存明文 token
+```
+
+---
+
+## 10.4 sms_verification_codes
+
+```sql
+create table sms_verification_codes (
+  id uuid primary key default gen_random_uuid(),
+
+  phone_hash text not null,
+  phone_e164 text not null,
+  code_hash text not null,
+
+  purpose text not null default 'create_watchlist',
+
+  expires_at timestamptz not null,
+  consumed_at timestamptz,
+
+  failed_attempts integer default 0,
+  request_ip text,
+
+  created_at timestamptz default now()
+);
+```
+
+---
+
+## 10.5 watchlist_items
 
 ```sql
 create table watchlist_items (
   id uuid primary key default gen_random_uuid(),
+
   watchlist_id uuid references watchlists(id) on delete cascade,
   fund_id uuid references funds(id) on delete cascade,
 
@@ -754,13 +958,16 @@ create table watchlist_items (
 );
 ```
 
-## 7.5 current_limits
+---
+
+## 10.6 current_limits
 
 ```sql
 create table current_limits (
   id uuid primary key default gen_random_uuid(),
+
   fund_id uuid references funds(id) on delete cascade,
-  fund_code text not null,
+  fund_code text unique not null,
 
   limit_amount numeric(12, 2),
   old_limit_amount numeric(12, 2),
@@ -779,13 +986,13 @@ create table current_limits (
   manual_verified_at timestamptz,
 
   created_at timestamptz default now(),
-  updated_at timestamptz default now(),
-
-  unique(fund_code)
+  updated_at timestamptz default now()
 );
 ```
 
-## 7.6 limit_change_events
+---
+
+## 10.7 limit_change_events
 
 ```sql
 create table limit_change_events (
@@ -813,7 +1020,9 @@ create table limit_change_events (
 );
 ```
 
-## 7.7 alert_events
+---
+
+## 10.8 alert_events
 
 ```sql
 create table alert_events (
@@ -838,12 +1047,16 @@ create table alert_events (
 
   confidence_state confidence_state not null,
 
+  action_token_hash text unique not null,
   dedupe_key text unique not null,
+
   created_at timestamptz default now()
 );
 ```
 
-## 7.8 notification_logs
+---
+
+## 10.9 notification_logs
 
 ```sql
 create table notification_logs (
@@ -853,19 +1066,27 @@ create table notification_logs (
   watchlist_id uuid references watchlists(id) on delete cascade,
   watchlist_item_id uuid references watchlist_items(id) on delete cascade,
 
-  email text not null,
-  channel text default 'email',
+  phone_hash text not null,
+  phone_masked text not null,
 
-  status text not null default 'pending',
+  channel text default 'sms',
+  sms_provider text,
+  sms_template_id text,
+  sms_request_id text,
+
+  status notification_status default 'pending',
   sent_at timestamptz,
   error_message text,
 
   dedupe_key text unique not null,
+
   created_at timestamptz default now()
 );
 ```
 
-## 7.9 feedback_logs
+---
+
+## 10.10 feedback_logs
 
 ```sql
 create table feedback_logs (
@@ -882,291 +1103,648 @@ create table feedback_logs (
   actual_payment_amount numeric(12, 2),
   comment text,
 
-  source_page text default 'alert_check_page',
+  source_page text default 'alert_detail_page',
+
   created_at timestamptz default now()
 );
 ```
 
 ---
 
-# 8. 核心报警判断伪代码
+# 11. 核心函数
+
+## 11.1 evaluateAlert()
+
+唯一报警判断入口。
 
 ```ts
-function evaluateAlert(params: {
+type EvaluateAlertInput = {
   plannedAmount: number;
   oldLimit: number | null;
   newLimit: number | null;
   oldStatus: LimitStatus;
   newStatus: LimitStatus;
   confidenceState: ConfidenceState;
-}) {
-  const {
-    plannedAmount,
-    oldLimit,
-    newLimit,
-    oldStatus,
-    newStatus,
-    confidenceState,
-  } = params;
+};
 
-  if (confidenceState === 'conflict') {
-    return {
-      shouldAlert: false,
-      reason: 'conflict_no_amount_alert',
-    };
-  }
+type EvaluateAlertOutput = {
+  shouldCreateAlert: boolean;
+  shouldSendSms: boolean;
+  alertType?: AlertType;
+  severity?: AlertSeverity;
+  calculable: boolean;
+  reason?: string;
+};
+```
 
-  if (confidenceState === 'stale') {
-    return {
-      shouldAlert: false,
-      reason: 'stale_no_alert',
-    };
-  }
+规则：
 
-  if (confidenceState === 'ambiguous') {
-    return {
-      shouldAlert: true,
-      alertType: 'uncertain_check_required',
-      severity: 'low',
-      calculable: false,
-    };
-  }
+```txt
+React 组件不得直接判断是否提醒
+API route 不得绕过 evaluateAlert()
+后台任务必须统一调用 evaluateAlert()
+```
 
-  if (newStatus === 'suspended' || newLimit === 0) {
-    return {
-      shouldAlert: true,
-      alertType: 'suspended',
-      severity: 'critical',
-      calculable: true,
-    };
-  }
+---
 
-  if (oldLimit === 0 && newLimit !== null && newLimit > 0) {
-    return {
-      shouldAlert: true,
-      alertType: 'reopened',
-      severity: 'high',
-      calculable: true,
-    };
-  }
+## 11.2 calculateShortfall()
 
-  if (
-    oldLimit !== null &&
-    newLimit !== null &&
-    oldLimit < plannedAmount &&
-    newLimit >= plannedAmount
-  ) {
-    return {
-      shouldAlert: true,
-      alertType: 'plan_recovery',
-      severity: 'high',
-      calculable: true,
-    };
-  }
+```ts
+function calculateShortfall(plannedAmount, newLimit, confidenceState) {
+  if confidenceState not in confirmed/probable:
+    return null;
 
-  if (
-    oldLimit !== null &&
-    newLimit !== null &&
-    oldLimit >= plannedAmount &&
-    newLimit < plannedAmount
-  ) {
-    return {
-      shouldAlert: true,
-      alertType: 'defensive_shortfall',
-      severity: newLimit <= plannedAmount * 0.2 ? 'critical' : 'high',
-      calculable: true,
-    };
-  }
+  estimatedExecutable = min(plannedAmount, newLimit);
+  estimatedShortfall = plannedAmount - estimatedExecutable;
+  executionRatio = estimatedExecutable / plannedAmount;
 
-  if (
-    oldLimit !== null &&
-    newLimit !== null &&
-    newLimit < oldLimit &&
-    newLimit < plannedAmount
-  ) {
-    return {
-      shouldAlert: true,
-      alertType: 'shortfall_worsened',
-      severity: 'medium',
-      calculable: true,
-    };
-  }
-
-  if (
-    oldLimit !== null &&
-    newLimit !== null &&
-    newLimit > oldLimit &&
-    newLimit < plannedAmount
-  ) {
-    return {
-      shouldAlert: true,
-      alertType: 'partial_recovery',
-      severity: 'low',
-      calculable: true,
-    };
-  }
-
-  return {
-    shouldAlert: false,
-    reason: 'limit_change_not_relevant_to_user_plan',
-  };
+  return result;
 }
 ```
 
 ---
 
-# 9. 极简交互流程
+## 11.3 shouldSendSms()
 
-## 9.1 首页
+```ts
+function shouldSendSms(alert, watchlist, watchlistItem, notificationHistory) {
+  if watchlist.sms_unsubscribed_at exists: return false;
+  if watchlistItem.notify_enabled === false: return false;
+  if alert.confidence_state in ambiguous/conflict/stale: return false;
+  if alert.alert_type not in allowedSmsAlertTypes: return false;
+  if dedupe_key exists: return false;
+  if phone daily count >= 3: return false;
 
-```txt
-标题：
-QDII 限购观察清单
-
-副标题：
-添加你正在场外定投的 QDII 基金。公开限额变化时，提醒你去支付宝核对定投计划。
-
-主按钮：
-添加第一只基金
+  return true;
+}
 ```
 
-## 9.2 添加基金页
+---
+
+# 12. API 设计
+
+## 12.1 POST /api/sms/send-code
+
+用途：发送验证码。
+
+入参：
+
+```json
+{
+  "phone": "18810244310"
+}
+```
+
+服务端动作：
+
+```txt
+校验手机号格式
+检查发送频率
+生成验证码
+写入 sms_verification_codes
+调用短信 provider
+返回成功
+```
+
+禁止：
+
+```txt
+不返回验证码
+不允许前端指定短信模板
+不允许绕过限流
+```
+
+---
+
+## 12.2 POST /api/sms/verify-code
+
+用途：验证手机号并创建观察清单。
+
+入参：
+
+```json
+{
+  "phone": "18810244310",
+  "code": "123456"
+}
+```
+
+服务端动作：
+
+```txt
+校验 code_hash
+检查 expires_at
+检查 consumed_at
+验证成功后写 consumed_at
+创建或读取 watchlist
+生成 manage_token
+写入 sms_opt_in_at
+返回 manage_token
+```
+
+---
+
+## 12.3 GET /api/watchlist
+
+用途：读取观察清单。
+
+入参：
+
+```txt
+token
+```
+
+返回：
+
+```txt
+watchlist
+watchlist_items
+current_limits
+alert summary
+```
+
+---
+
+## 12.4 POST /api/watchlist/items
+
+用途：添加观察基金。
+
+入参：
+
+```json
+{
+  "token": "manage_token",
+  "fundCode": "019172",
+  "plannedAmount": 100,
+  "frequency": "weekly_friday",
+  "notifyEnabled": true
+}
+```
+
+服务端动作：
+
+```txt
+校验 token
+查询 fund
+查询 current_limit
+写入 watchlist_items
+保存 last_seen_limit_amount
+返回当前影响判断
+```
+
+---
+
+## 12.5 PATCH /api/watchlist/items/:id
+
+用途：修改观察计划。
+
+允许改：
+
+```txt
+planned_amount
+frequency
+notify_enabled
+```
+
+---
+
+## 12.6 DELETE /api/watchlist/items/:id
+
+用途：删除观察基金。
+
+---
+
+## 12.7 POST /api/admin/current-limit/update
+
+用途：后台更新当前限额。
+
+服务端动作：
+
+```txt
+读取旧 current_limit
+写入新 current_limit
+生成 limit_change_event
+触发 alert evaluation job
+```
+
+仅管理员可用。
+
+---
+
+## 12.8 POST /api/jobs/evaluate-alerts
+
+用途：后台任务扫描变化并生成提醒。
+
+服务端动作：
+
+```txt
+读取未处理 limit_change_events
+查询对应 watchlist_items
+调用 evaluateAlert()
+生成 alert_events
+调用 shouldSendSms()
+写入 notification_logs
+调用短信 provider
+```
+
+禁止前端调用。
+
+---
+
+## 12.9 POST /api/feedback
+
+用途：用户提交反馈。
+
+入参：
+
+```json
+{
+  "alertToken": "action_token",
+  "feedbackType": "mismatched",
+  "actualLimitAmount": 50,
+  "actualPaymentAmount": 10,
+  "comment": "支付宝显示限额不同"
+}
+```
+
+---
+
+## 12.10 POST /api/watchlist/unsubscribe
+
+用途：退订短信提醒。
+
+入参：
+
+```json
+{
+  "token": "manage_token"
+}
+```
+
+服务端动作：
+
+```txt
+写入 sms_unsubscribed_at
+关闭所有 watchlist_items.notify_enabled
+返回退订成功
+```
+
+---
+
+# 13. 页面结构
+
+## 13.1 创建观察清单页
+
+目标：验证手机号。
+
+展示：
+
+```txt
+手机号输入框
+获取验证码
+验证码输入框
+创建观察清单
+隐私与提醒说明
+```
+
+---
+
+## 13.2 观察清单页
+
+目标：管理观察基金。
+
+展示：
+
+```txt
+脱敏手机号
+正在监控基金数量
+添加基金按钮
+观察基金卡片列表
+退订入口
+```
+
+卡片状态：
+
+```txt
+需核对
+限额恢复
+暂未影响
+数据不确定
+数据冲突
+数据过期
+```
+
+---
+
+## 13.3 添加观察基金页
+
+目标：30 秒内完成配置。
+
+字段：
 
 ```txt
 基金代码 / 名称
-每日计划定投金额
-开启限额变化提醒
-邮箱
-提交
+定投周期
+单次定投金额
+开启短信提醒
 ```
 
-提交后：
+加入前必须展示：
 
 ```txt
-已加入观察清单
-当前公开限额：X 元
-你的计划：每日 Y 元
-当前判断：暂未影响 / 可能受影响 / 数据需核对
+当前公开限额
+当前可信状态
+当前是否可能影响计划
 ```
 
-## 9.3 观察清单页
+---
+
+## 13.4 限额变化提醒详情页
+
+目标：把短信点击转成支付宝核对。
+
+展示：
 
 ```txt
-基金 A
-每日计划：100 元
-当前限额：10 元
-状态：可能缩水
-按钮：去支付宝核对 / 修改观察金额 / 删除
-
-基金 B
-每日计划：100 元
-当前限额：10000 元
-状态：暂未影响
-按钮：重新检测 / 删除
-```
-
-## 9.4 邮件提醒落地页
-
-```txt
-本次限额变化
-基金名称
-old_limit → new_limit
-你的计划金额
+限额变化：old_limit → new_limit
+用户观察计划：frequency + planned_amount
 预计可执行金额
 预计少投金额
 可信状态
-去支付宝核对
-反馈一致 / 不一致 / 找不到入口
+支付宝核对清单
+去支付宝核对按钮
+复制核对清单按钮
+反馈按钮
+退订入口
+免责声明
 ```
 
 ---
 
-# 10. Vibe Coding 开发顺序
+## 13.5 反馈弹窗
 
-## Day 1
+默认：
 
 ```txt
-1. 初始化 Next.js + Supabase
-2. 建表：funds / watchlists / watchlist_items / current_limits
-3. 做首页 + 添加基金流程
-4. 做观察清单页
-5. seed 8 只热门 QDII 基金
+一致
+不一致
+找不到入口
 ```
 
-## Day 2
+不一致展开：
 
 ```txt
-1. 建 limit_change_events / alert_events / notification_logs
-2. 写 evaluateAlert()
-3. 写模拟后台任务：手动触发限额变化
-4. 写邮件模板
-5. 接 Resend
-6. 写提醒落地页 + 反馈按钮
-```
-
-## Day 3 可选
-
-```txt
-1. 增加 ambiguous / conflict / stale 降级页
-2. 增加去重逻辑
-3. 增加反馈日志
-4. 增加管理链接 token
-5. 增加简单后台 current_limits 编辑页
+支付宝实际显示限额，可选
+支付宝实际扣款金额，可选
+备注，可选
 ```
 
 ---
 
-# 11. 成功指标
+# 14. Vibe Coding 开发顺序
 
-## 11.1 行为指标
+## Step 1：项目骨架
 
 ```txt
-访问后创建观察清单比例 ≥ 8%
-创建观察清单后添加基金比例 ≥ 60%
+Next.js
+Tailwind
+Supabase client
+环境变量
+基础布局
+```
+
+## Step 2：数据库 migration
+
+```txt
+enum
+funds
+watchlists
+sms_verification_codes
+watchlist_items
+current_limits
+limit_change_events
+alert_events
+notification_logs
+feedback_logs
+```
+
+## Step 3：Domain 层
+
+```txt
+confidence.ts
+calculateShortfall.ts
+evaluateAlert.ts
+shouldSendSms.ts
+buildDedupeKey.ts
+maskPhone.ts
+hashToken.ts
+```
+
+## Step 4：短信抽象层
+
+```txt
+src/lib/sms/provider.ts
+src/lib/sms/templates.ts
+src/lib/sms/sendSms.ts
+```
+
+注意：
+
+```txt
+业务代码只调用 sendSms()
+不直接调用具体服务商 SDK
+```
+
+## Step 5：手机号验证接口
+
+```txt
+POST /api/sms/send-code
+POST /api/sms/verify-code
+```
+
+## Step 6：观察清单接口
+
+```txt
+GET /api/watchlist
+POST /api/watchlist/items
+PATCH /api/watchlist/items/:id
+DELETE /api/watchlist/items/:id
+POST /api/watchlist/unsubscribe
+```
+
+## Step 7：页面
+
+```txt
+创建观察清单页
+观察清单页
+添加基金页
+修改计划弹窗
+提醒详情页
+反馈弹窗
+退订页
+```
+
+## Step 8：后台任务
+
+```txt
+admin 更新 current_limits
+生成 limit_change_events
+evaluate alerts
+send sms
+notification_logs
+```
+
+## Step 9：闭环测试
+
+必须跑通：
+
+```txt
+验证手机号
+→ 添加基金
+→ 模拟限额 100 → 10
+→ 生成 defensive_shortfall
+→ 发送短信
+→ 点击短信链接
+→ 查看提醒详情
+→ 去支付宝核对
+→ 反馈不一致
+→ feedback_logs 入库
+```
+
+---
+
+# 15. 验收标准
+
+## 15.1 最小闭环验收
+
+必须完整跑通：
+
+```txt
+用户验证手机号
+→ 添加观察基金
+→ 系统监控限额变化
+→ 只在影响计划时发短信
+→ 用户点击短信链接
+→ 去支付宝核对
+→ 回来反馈
+```
+
+如果任一环缺失，MVP 不成立。
+
+---
+
+## 15.2 报警验收用例
+
+| 场景     | Planned |   Old |   New | 是否短信 |
+| ------ | ------: | ----: | ----: | ---: |
+| 缩水     |     100 |   100 |    10 |    是 |
+| 大额无关   |     100 | 50000 | 10000 |    否 |
+| 恢复覆盖计划 |     100 |    10 |   100 |    是 |
+| 从 0 恢复 |     100 |     0 |    10 |    是 |
+| 暂停     |     100 |   100 |     0 |    是 |
+| 数据不清   |     100 |   100 |  null |    否 |
+| 来源冲突   |     100 |   100 |    10 |    否 |
+| 数据过期   |     100 |   100 |    10 |    否 |
+| 重复事件   |     100 |   100 |    10 |    否 |
+
+---
+
+## 15.3 防重复验收
+
+```txt
+同一 alert_event 不能发两次
+同一手机号一天不能超过 3 条
+退订后不能发送
+关闭单基金 notify_enabled 后不能发送
+ambiguous / conflict / stale 不发送金额短信
+```
+
+---
+
+## 15.4 文案验收
+
+不得出现：
+
+```txt
+建议买入
+建议加仓
+建议卖出
+收益机会
+抄底
+推荐
+```
+
+必须出现：
+
+```txt
+公开限额变化
+你配置的观察计划
+可能影响定投执行
+请去支付宝核对
+是否修改由你自行决定
+不构成投资建议
+```
+
+---
+
+# 16. 成功指标
+
+## 16.1 用户行为指标
+
+```txt
+手机号验证完成率 ≥ 50%
+验证后添加基金率 ≥ 60%
 单用户平均添加基金数 ≥ 2
-添加基金后填写定投金额比例 ≥ 80%
-收到提醒后点击落地页比例 ≥ 20%
-点击后反馈比例 ≥ 5%
+添加基金后开启短信提醒率 ≥ 80%
+短信点击提醒详情率 ≥ 20%
+点击后反馈率 ≥ 5%
+退订率 ≤ 10%
 ```
 
-## 11.2 数据指标
+## 16.2 系统指标
 
 ```txt
-热门基金 current_limits 覆盖率 ≥ 80%
-confirmed / probable 数据占比 ≥ 70%
+短信重复发送率 = 0
+短信发送失败率 ≤ 5%
+有效提醒命中率 ≥ 70%
 误报反馈率 ≤ 10%
-重复提醒率 ≤ 1%
+confirmed / probable 数据占比 ≥ 70%
 conflict 平均处理时长 ≤ 24 小时
 ```
 
 ---
 
-# 12. 最终边界
+# 17. 最终边界
 
-系统只提醒：
+本产品最终只负责：
 
 ```txt
-公开限额变化可能影响你的定投计划执行
+用户手动配置观察基金
+系统监控公开限额
+判断是否影响配置计划
+通过短信提醒用户核对
+收集用户反馈修正数据可信度
 ```
 
-系统不告诉用户：
+本产品永远不负责：
 
 ```txt
-该不该买
-买多少
-什么时候买
-未来收益如何
-是否应该加仓
+读取真实交易
+判断真实持仓
+修改定投计划
+提供买卖建议
+预测收益
+推荐基金
 ```
 
 最终闭环：
 
 ```txt
-用户添加 n 个基金
-→ 系统监控公开限额
-→ 限额变化影响用户计划
-→ 系统提醒
-→ 用户去支付宝核对 / 修改
-→ 用户反馈
-→ 数据可信度提升
+用户验证手机号
+→ 添加观察基金
+→ 系统监控限额变化
+→ 只在影响计划时发短信
+→ 用户点击短信链接
+→ 去支付宝核对
+→ 回来反馈
 ```
